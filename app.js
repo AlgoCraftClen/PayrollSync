@@ -6,6 +6,7 @@ class PayTrackApp {
     this.activePage = "dashboard";
     this.paystubPage = 1;
     this.paystubPerPage = 8;
+    this.pendingUpload = null;
     
     // Chart instances
     this.dashboardTrendChart = null;
@@ -15,6 +16,332 @@ class PayTrackApp {
     
     // Bind methods to ensure correct execution context
     this.init = this.init.bind(this);
+  }
+
+  formatInputDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  getTodayInputDate() {
+    return this.formatInputDate(new Date());
+  }
+
+  safeReadStoredArray(key) {
+    try {
+      const raw = localStorage.getItem(key);
+
+      if (!raw) {
+        return [];
+      }
+
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch (error) {
+      console.warn(`PayTrack: invalid ${key} data detected. Resetting to an empty list.`, error);
+    }
+
+    try {
+      localStorage.setItem(key, JSON.stringify([]));
+    } catch (storageError) {
+      console.error(`PayTrack: unable to reset ${key} storage.`, storageError);
+    }
+
+    return [];
+  }
+
+  refreshDerivedViews() {
+    if (this.activePage === "dashboard") {
+      this.renderDashboard();
+      return;
+    }
+
+    if (this.activePage === "paystubs") {
+      this.renderPaystubs();
+      return;
+    }
+
+    if (this.activePage === "reports") {
+      this.renderReports();
+    }
+  }
+
+  normalizeOCRText(text) {
+    return (text || "")
+      .replace(/\r/g, "")
+      .replace(/\u00A0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  extractNumber(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    const match = String(value).match(/\d+(?:,\d{3})*(?:\.\d+)?/);
+    if (!match) {
+      return null;
+    }
+
+    return Number(match[0].replace(/,/g, ""));
+  }
+
+  normalizeOCRDate(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return null;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return raw;
+    }
+
+    const usMatch = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (usMatch) {
+      const month = Number(usMatch[1]);
+      const day = Number(usMatch[2]);
+      const year = Number(usMatch[3]);
+      const fullYear = year < 100 ? 2000 + year : year;
+      const iso = `${fullYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      return Number.isNaN(new Date(iso).getTime()) ? null : iso;
+    }
+
+    return null;
+  }
+
+  matchEmployeeFromOCR(ocrText, fallbackFileName) {
+    const text = `${ocrText || ""} ${fallbackFileName || ""}`.toLowerCase();
+
+    let bestMatch = null;
+    let bestScore = 0;
+
+    this.employees.forEach(emp => {
+      const empName = (emp.name || "").toLowerCase();
+      const empId = (emp.id || "").toLowerCase();
+      let score = 0;
+
+      if (empId && text.includes(empId)) {
+        score += 3;
+      }
+
+      empName.split(/\s+/).forEach(token => {
+        if (token.length > 2 && text.includes(token)) {
+          score += 1;
+        }
+      });
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = emp;
+      }
+    });
+
+    return bestScore > 0 ? bestMatch : null;
+  }
+
+  parseOCRText(ocrText, fallbackFileName) {
+    const text = this.normalizeOCRText(ocrText);
+    const lines = text
+      .split("\n")
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    const parsed = {
+      employee: this.matchEmployeeFromOCR(text, fallbackFileName),
+      payDate: null,
+      payPeriodStart: null,
+      payPeriodEnd: null,
+      hourlyRate: null,
+      hoursWorked: null,
+      overtimeHours: null,
+      grossPay: null,
+      netPay: null,
+      bomiLoan: null,
+      healthInsurance: null
+    };
+
+    const dateCandidates = [];
+    const dateRegex = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/g;
+    let match;
+    while ((match = dateRegex.exec(text)) !== null) {
+      const normalized = this.normalizeOCRDate(match[1]);
+      if (normalized) {
+        dateCandidates.push(normalized);
+      }
+    }
+
+    if (dateCandidates.length >= 2) {
+      parsed.payPeriodStart = dateCandidates[0];
+      parsed.payPeriodEnd = dateCandidates[1];
+    }
+
+    const payDateLabel = lines.find(line => /pay date|payment date|paydate/.test(line.toLowerCase()));
+    if (payDateLabel) {
+      const nextLine = lines[lines.indexOf(payDateLabel) + 1];
+      const payDateCandidate = this.normalizeOCRDate(nextLine || payDateLabel);
+      if (payDateCandidate) {
+        parsed.payDate = payDateCandidate;
+      }
+    }
+
+    if (!parsed.payDate && dateCandidates.length >= 1) {
+      parsed.payDate = dateCandidates[0];
+    }
+
+    const labelMap = [
+      ["hourly rate", "hourlyRate"],
+      ["regular hours", "hoursWorked"],
+      ["hours worked", "hoursWorked"],
+      ["overtime", "overtimeHours"],
+      ["ot hours", "overtimeHours"],
+      ["gross pay", "grossPay"],
+      ["gross earnings", "grossPay"],
+      ["net pay", "netPay"],
+      ["net earnings", "netPay"],
+      ["bomi", "bomiLoan"],
+      ["health", "healthInsurance"]
+    ];
+
+    lines.forEach((line, index) => {
+      const lower = line.toLowerCase();
+      labelMap.forEach(([label, key]) => {
+        if (!lower.includes(label)) {
+          return;
+        }
+
+        const sameLineValue = this.extractNumber(line);
+        if (sameLineValue !== null && key !== "hoursWorked" && key !== "overtimeHours") {
+          parsed[key] = sameLineValue;
+          return;
+        }
+
+        const nextLine = lines[index + 1];
+        if (nextLine) {
+          const nextNumber = this.extractNumber(nextLine);
+          if (nextNumber !== null) {
+            parsed[key] = nextNumber;
+          }
+        }
+      });
+    });
+
+    if (parsed.hoursWorked === null) {
+      const hoursLine = lines.find(line => /hours worked|regular hours|hours/.test(line.toLowerCase()));
+      if (hoursLine) {
+        parsed.hoursWorked = this.extractNumber(hoursLine);
+      }
+    }
+
+    if (parsed.overtimeHours === null) {
+      const overtimeLine = lines.find(line => /overtime|ot hours/.test(line.toLowerCase()));
+      if (overtimeLine) {
+        parsed.overtimeHours = this.extractNumber(overtimeLine);
+      }
+    }
+
+    if (parsed.grossPay === null) {
+      const grossLine = lines.find(line => /gross|total earnings/.test(line.toLowerCase()));
+      if (grossLine) {
+        parsed.grossPay = this.extractNumber(grossLine);
+      }
+    }
+
+    if (parsed.netPay === null) {
+      const netLine = lines.find(line => /net pay|net earnings/.test(line.toLowerCase()));
+      if (netLine) {
+        parsed.netPay = this.extractNumber(netLine);
+      }
+    }
+
+    if (parsed.bomiLoan === null) {
+      const bomiLine = lines.find(line => /bomi/.test(line.toLowerCase()));
+      if (bomiLine) {
+        parsed.bomiLoan = this.extractNumber(bomiLine);
+      }
+    }
+
+    if (parsed.healthInsurance === null) {
+      const healthLine = lines.find(line => /health/.test(line.toLowerCase()));
+      if (healthLine) {
+        parsed.healthInsurance = this.extractNumber(healthLine);
+      }
+    }
+
+    return parsed;
+  }
+
+  async runOCR(file) {
+    if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
+      this.showToast("OCR library failed to load. Please refresh and try again.", "error");
+      return null;
+    }
+
+    try {
+      const result = await Tesseract.recognize(file, "eng", {
+        logger: (progress) => {
+          if (progress?.status && progress.status !== "recognizing text") {
+            const statusEl = document.getElementById("scan-status");
+            if (statusEl) {
+              statusEl.innerText = progress.status;
+            }
+          }
+        }
+      });
+
+      return (result?.data?.text || "").trim();
+    } catch (error) {
+      console.error("PayTrack: OCR failed", error);
+      this.showToast("OCR failed to read the image. Please try another file or use the demo flow.", "error");
+      return null;
+    }
+  }
+
+  applyOCRDataToForm(parsed) {
+    const selectedEmployee = parsed.employee || this.matchEmployeeFromOCR(this.pendingUpload?.fileName || "", this.pendingUpload?.fileName || "");
+    if (selectedEmployee) {
+      this.prefillOCRReviewForm(selectedEmployee.id);
+    } else {
+      this.prefillOCRReviewForm(this.employees[0]?.id);
+    }
+
+    if (parsed.hourlyRate !== null) {
+      document.getElementById("review-hourly-rate").value = parsed.hourlyRate.toFixed(2);
+    }
+
+    if (parsed.hoursWorked !== null) {
+      document.getElementById("review-hours-worked").value = String(parsed.hoursWorked);
+    }
+
+    if (parsed.overtimeHours !== null) {
+      document.getElementById("review-ot-hours").value = String(parsed.overtimeHours);
+    }
+
+    if (parsed.payDate) {
+      document.getElementById("review-pay-date").value = parsed.payDate;
+    }
+
+    if (parsed.payPeriodStart) {
+      document.getElementById("review-period-start").value = parsed.payPeriodStart;
+    }
+
+    if (parsed.payPeriodEnd) {
+      document.getElementById("review-period-end").value = parsed.payPeriodEnd;
+    }
+
+    if (parsed.bomiLoan !== null) {
+      document.getElementById("review-bomi-loan").value = parsed.bomiLoan.toFixed(2);
+    }
+
+    if (parsed.healthInsurance !== null) {
+      document.getElementById("review-health").value = parsed.healthInsurance.toFixed(2);
+    }
+
+    this.recalculateReviewTotals();
   }
 
   // Application Lifecycle Initializer
@@ -38,37 +365,23 @@ class PayTrackApp {
   }
 
   initDatabase() {
-    const localEmployees = localStorage.getItem("paytrack_employees");
-    const localPaystubs = localStorage.getItem("paytrack_paystubs");
-
     // Start with an empty database — no seeding.
     // Only read what is already in localStorage if previously saved by the user.
-    if (localEmployees) {
-      this.employees = JSON.parse(localEmployees);
-    } else {
-      this.employees = [];
-      localStorage.setItem("paytrack_employees", JSON.stringify([]));
-    }
-
-    if (localPaystubs) {
-      this.paystubs = JSON.parse(localPaystubs);
-    } else {
-      this.paystubs = [];
-      localStorage.setItem("paytrack_paystubs", JSON.stringify([]));
-    }
+    this.employees = this.safeReadStoredArray("paytrack_employees");
+    this.paystubs = this.safeReadStoredArray("paytrack_paystubs");
 
     // Sort paystubs by payDate descending by default
     this.paystubs.sort((a, b) => new Date(b.payDate) - new Date(a.payDate));
   }
 
   saveToLocalStorage() {
-    localStorage.setItem("paytrack_employees", JSON.stringify(this.employees));
-    localStorage.setItem("paytrack_paystubs", JSON.stringify(this.paystubs));
-    // Helpful debug log for troubleshooting save issues in the browser console
     try {
+      localStorage.setItem("paytrack_employees", JSON.stringify(this.employees));
+      localStorage.setItem("paytrack_paystubs", JSON.stringify(this.paystubs));
       console.debug(`PayTrack: saved ${this.employees.length} employees and ${this.paystubs.length} paystubs to localStorage.`);
-    } catch (err) {
-      console.warn('PayTrack: unable to log localStorage save details', err);
+    } catch (error) {
+      console.error("PayTrack: unable to persist data to localStorage.", error);
+      this.showToast("Unable to save data. Please check browser storage availability.", "error");
     }
   }
 
@@ -90,7 +403,7 @@ class PayTrackApp {
     }
 
     // Set Default Hired Date in Modal to Today
-    document.getElementById("emp-modal-hired").value = new Date().toISOString().split("T")[0];
+    document.getElementById("emp-modal-hired").value = this.getTodayInputDate();
   }
 
   // Routing / Page Swapper
@@ -520,7 +833,7 @@ class PayTrackApp {
       title.innerText = "Add New Employee Profile";
       document.getElementById("employee-form").reset();
       document.getElementById("emp-modal-id").value = "";
-      document.getElementById("emp-modal-hired").value = new Date().toISOString().split("T")[0];
+      document.getElementById("emp-modal-hired").value = this.getTodayInputDate();
       submitBtn.innerText = "Save Profile";
     }
 
@@ -565,6 +878,10 @@ class PayTrackApp {
     this.closeEmployeeModal();
     this.renderEmployees();
     this.initFilterSelectors(); // Update select options
+
+    if (this.activePage === "upload") {
+      this.initUploadView();
+    }
   }
 
   deleteEmployee(employeeId) {
@@ -577,6 +894,10 @@ class PayTrackApp {
       this.showToast(`Employee ${emp.name} deleted successfully`, "success");
       this.renderEmployees();
       this.initFilterSelectors();
+
+      if (this.activePage === "upload") {
+        this.initUploadView();
+      }
     }
   }
 
@@ -933,7 +1254,9 @@ class PayTrackApp {
   }
 
   triggerFileSelect() {
-    document.getElementById("file-input").click();
+    const fileInput = document.getElementById("file-input");
+    fileInput.value = "";
+    fileInput.click();
   }
 
   handleDragOver(e) {
@@ -962,41 +1285,69 @@ class PayTrackApp {
     }
   }
 
-  processUploadedFile(file) {
+  async processUploadedFile(file) {
     if (this.employees.length === 0) {
       this.showToast("Add at least one employee before uploading a paystub.", "error");
       return;
     }
 
-    console.log(`Processing file: ${file.name}`);
+    const fileType = (file.type || "").toLowerCase();
+    const fileName = (file.name || "").trim();
+    const imageTypes = ["image/png", "image/jpeg", "image/jpg"];
+
+    if (!fileName) {
+      this.showToast("Please choose a file to upload.", "error");
+      return;
+    }
+
+    if (!imageTypes.includes(fileType) && !fileName.toLowerCase().match(/\.(png|jpg|jpeg)$/i)) {
+      this.showToast("OCR is currently available for PNG and JPG images only. Please upload an image file.", "error");
+      return;
+    }
+
+    this.pendingUpload = {
+      source: "upload",
+      fileName,
+      fileType,
+      size: file.size
+    };
+
+    console.log(`Processing file: ${fileName}`);
     const scanOverlay = document.getElementById("scan-overlay");
     const scanStatus = document.getElementById("scan-status");
-    
-    scanOverlay.style.display = "flex";
 
-    // Simulate AI LLM processing stages
-    setTimeout(() => {
-      scanStatus.innerText = "Extracting text contours via OCR...";
-      setTimeout(() => {
-        scanStatus.innerText = "Matching employee records and parsing wages...";
-        setTimeout(() => {
-          scanStatus.innerText = "Applying local tax models (MISSA & BOMI loans)...";
-          setTimeout(() => {
-            scanOverlay.style.display = "none";
-            
-            // Pick first employee if roster has entries
-            const firstEmp = this.employees[0];
-            this.prefillOCRReviewForm(firstEmp.id);
-            this.showToast(`AI successfully parsed "${file.name}" — review the extracted data.`, "success");
-          }, 600);
-        }, 600);
-      }, 600);
-    }, 600);
+    scanOverlay.style.display = "flex";
+    scanStatus.innerText = "Loading OCR engine...";
+
+    const ocrText = await this.runOCR(file);
+    scanOverlay.style.display = "none";
+
+    if (!ocrText) {
+      return;
+    }
+
+    const parsed = this.parseOCRText(ocrText, fileName);
+    if (!parsed.employee && this.employees.length > 0) {
+      parsed.employee = this.matchEmployeeFromOCR(fileName, fileName);
+    }
+
+    if (parsed.employee) {
+      console.debug("PayTrack: matched upload to employee", parsed.employee.id, parsed.employee.name);
+    }
+
+    this.applyOCRDataToForm(parsed);
+    this.showToast(`AI successfully parsed "${fileName}" — review the extracted data.`, "success");
   }
 
   simulateDemoUpload(employeeId) {
     const scanOverlay = document.getElementById("scan-overlay");
     const scanStatus = document.getElementById("scan-status");
+
+    this.pendingUpload = {
+      source: "demo",
+      fileName: null,
+      employeeId
+    };
     
     scanOverlay.style.display = "flex";
     scanStatus.innerText = "Connecting to OCR Engine...";
@@ -1029,17 +1380,17 @@ class PayTrackApp {
     reviewEmpSelect.value = emp.id;
     document.getElementById("review-hourly-rate").value = emp.hourlyRate.toFixed(2);
     
-    // Assign bi-weekly dates based on today
+    // Assign bi-weekly dates based on local calendar to avoid off-by-one-day errors
     const today = new Date();
-    const payPeriodEndStr = today.toISOString().split("T")[0];
+    const payPeriodEndStr = this.formatInputDate(today);
     
     const payPeriodStart = new Date();
     payPeriodStart.setDate(today.getDate() - 14);
-    const payPeriodStartStr = payPeriodStart.toISOString().split("T")[0];
+    const payPeriodStartStr = this.formatInputDate(payPeriodStart);
     
     const payDate = new Date();
     payDate.setDate(today.getDate() + 5);
-    const payDateStr = payDate.toISOString().split("T")[0];
+    const payDateStr = this.formatInputDate(payDate);
 
     document.getElementById("review-period-start").value = payPeriodStartStr;
     document.getElementById("review-period-end").value = payPeriodEndStr;
@@ -1102,7 +1453,11 @@ class PayTrackApp {
 
     const empId = document.getElementById("review-employee").value;
     const emp = this.employees.find(el => el.id === empId);
-    if (!emp) return;
+
+    if (!emp) {
+      this.showToast("Please select a valid employee before saving.", "error");
+      return;
+    }
 
     const payPeriodStart = document.getElementById("review-period-start").value;
     const payPeriodEnd = document.getElementById("review-period-end").value;
@@ -1112,6 +1467,16 @@ class PayTrackApp {
     const overtimeHours = parseFloat(document.getElementById("review-ot-hours").value);
     const bomiLoanDeduction = parseFloat(document.getElementById("review-bomi-loan").value);
     const healthInsurance = parseFloat(document.getElementById("review-health").value);
+
+    if (!payPeriodStart || !payPeriodEnd || !payDate || Number.isNaN(hourlyRate) || Number.isNaN(hoursWorked) || Number.isNaN(overtimeHours) || Number.isNaN(bomiLoanDeduction) || Number.isNaN(healthInsurance)) {
+      this.showToast("Please complete every paystub field before saving.", "error");
+      return;
+    }
+
+    if (new Date(payPeriodStart) > new Date(payPeriodEnd)) {
+      this.showToast("Pay period start cannot be after pay period end.", "error");
+      return;
+    }
 
     // Dynamic payroll formulas mapping
     const regularEarnings = hoursWorked * hourlyRate;
@@ -1143,8 +1508,10 @@ class PayTrackApp {
 
     const sickAccrued = 4.0;
     const annualAccrued = 6.0;
-    const sickUsed = overtimeHours > 4 ? 0 : 0; // Simple simulation
+    const sickUsed = 0;
     const annualUsed = 0;
+
+    const sourceFileName = this.pendingUpload?.fileName || `paystub_${emp.name.toLowerCase().replace(/\s+/g, "_")}_${payDate}.pdf`;
 
     const newStub = {
       id: `stub-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -1189,23 +1556,23 @@ class PayTrackApp {
         annualBalance: prevAnnualBalance + annualAccrued - annualUsed
       },
       status: "Approved",
-      fileName: `paystub_${emp.name.toLowerCase().replace(/\s+/g, "_")}_${payDate}.pdf`
+      fileName: sourceFileName
     };
-    // Save Stub & Refresh State (log new stub for debugging)
-    console.debug('PayTrack: committing new paystub', newStub);
+
+    console.debug("PayTrack: committing new paystub", newStub);
     this.paystubs.unshift(newStub);
     this.saveToLocalStorage();
+    this.pendingUpload = null;
 
     this.showToast(`Paystub successfully committed for ${emp.name}`, "success");
-    
-    // Refresh filter options
     this.initFilterSelectors();
-    
-    // Route to paystubs
+    this.refreshDerivedViews();
     this.showPage("paystubs");
   }
 
   cancelOCRReview() {
+    this.pendingUpload = null;
+
     const formCard = document.getElementById("review-form-card");
     formCard.classList.remove("active");
     document.getElementById("paystub-ocr-form").reset();
@@ -1412,6 +1779,7 @@ class PayTrackApp {
       this.saveToLocalStorage();
       this.initFilterSelectors();
       this.showToast(`Paystub record deleted.`, "success");
+      this.refreshDerivedViews();
       this.renderPaystubs();
     }
   }
