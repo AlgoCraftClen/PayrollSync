@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PayTrack — Premium Local Payroll sync & Analytics</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Chart.js for High-Fidelity Animated Charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- One-time migration: Wipe all previously seeded/mock data on upgrade -->
+  <script>
+    (function() {
+      if (!localStorage.getItem('paytrack_v2_clean')) {
+        localStorage.removeItem('paytrack_employees');
+        localStorage.removeItem('paytrack_paystubs');
+        localStorage.setItem('paytrack_v2_clean', '1');
+        console.log('PayTrack: Legacy data cleared. Fresh start.');
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">
+          <!-- Payroll Sync Icon (Wallet/Analytics) -->
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M21 18c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V6c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v12zm-2 0V6H5v12h14zm-7-2h5v-2h-5v2zm0-4h5V8h-5v4z" />
+          </svg>
+        </div>
+        <span class="brand-name">PayTrack</span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <ul class="nav-menu">
+          <li class="nav-item">
+            <a href="#" class="nav-link active" data-page="dashboard">
+              <!-- Dashboard SVG -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="9" />
+                <rect x="14" y="3" width="7" height="5" />
+                <rect x="14" y="12" width="7" height="9" />
+                <rect x="3" y="16" width="7" height="5" />
+              </svg>
+              <span>Dashboard</span>
+            </a>
+          </li>
+          <li class="nav-item">
+            <a href="#" class="nav-link" data-page="employees">
+              <!-- Employees SVG -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              <span>Employees</span>
+            </a>
+          </li>
+          <li class="nav-item">
+            <a href="#" class="nav-link" data-page="paystubs">
+              <!-- Paystubs SVG -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+                <polyline points="10 9 9 9 8 9" />
+              </svg>
+              <span>Paystubs</span>
+            </a>
+          </li>
+          <li class="nav-item">
+            <a href="#" class="nav-link" data-page="upload">
+              <!-- Upload SVG -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              <span>AI Paystub Upload</span>
+            </a>
+          </li>
+          <li class="nav-item">
+            <a href="#" class="nav-link" data-page="reports">
+              <!-- Reports SVG -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10" />
+                <line x1="12" y1="20" x2="12" y2="4" />
+                <line x1="6" y1="20" x2="6" y2="14" />
+              </svg>
+              <span>Reports</span>
+            </a>
+          </li>
+        </ul>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-profile">
+          <div class="avatar">CM</div>
+          <div class="user-info">
+            <span class="user-name">CM Procurement</span>
+            <span class="user-role">Administrator</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Workspace Area -->
+    <main class="main-content">
+      
+      <!-- HEADER -->
+      <header class="header-container">
+        <div class="page-title-group">
+          <h1 id="current-page-title">Dashboard</h1>
+          <p id="current-page-subtitle">Track key payroll metrics, historical trends, and deductions at a glance.</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-secondary" onclick="app.showPage('upload')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Upload Paystub
+          </button>
+          <button class="btn btn-primary" onclick="app.openEmployeeModal()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Employee
+          </button>
+        </div>
+      </header>
+
+      <!-- VIEW: DASHBOARD -->
+      <section id="page-dashboard" class="page-section active">
+        <!-- Empty state getting-started guide -->
+        <div id="dashboard-empty-state" class="glass-card" style="text-align:center; padding: 4rem 2rem; margin-bottom: 2.5rem; border-style: dashed; display:none;">
+          <div style="width:72px; height:72px; border-radius:50%; background:rgba(99,102,241,0.12); display:flex; align-items:center; justify-content:center; margin: 0 auto 1.5rem auto;">
+            <svg width="36" height="36" fill="none" stroke="var(--color-primary)" stroke-width="1.5" viewBox="0 0 24 24">
+              <path d="M9 17H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5M13 21l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"/>
+              <circle cx="17" cy="17" r="4"/>
+            </svg>
+          </div>
+          <h2 style="font-family:var(--font-display); font-size:1.5rem; font-weight:700; margin-bottom:0.5rem;">Your payroll dashboard is ready.</h2>
+          <p style="color:var(--text-secondary); max-width:420px; margin: 0 auto 2rem auto; line-height:1.6;">
+            Get started by adding your employees and uploading your first paystub. All analytics will populate automatically.
+          </p>
+          <div style="display:flex; gap:1rem; justify-content:center; flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="app.showPage('employees')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add First Employee
+            </button>
+            <button class="btn btn-secondary" onclick="app.showPage('upload')">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload First Paystub
+            </button>
+          </div>
+        </div>
+
+        <!-- KPI Cards Grid -->
+        <div class="kpi-grid">
+          <!-- KPI 1 -->
+          <div class="glass-card kpi-card">
+            <div class="kpi-header">
+              <span class="kpi-title">Total Net Pay</span>
+              <div class="kpi-icon">
+                <svg width="20" height="20" fill="var(--color-success)" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z" style="display:none;"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 13h-2v-6h2v6zm0-8h-2V5h2v2z" style="display:none;"/><path d="M5 8h14v10H5z" style="display:none;"/><path d="M12 21c-4.97 0-9-4.03-9-9s4.03-9 9-9 9 4.03 9 9-4.03 9-9 9zm0-16.5c-4.14 0-7.5 3.36-7.5 7.5s3.36 7.5 7.5 7.5 7.5-3.36 7.5-7.5-3.36-7.5-7.5-7.5zM12.5 7H10v1.5h2.5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5H9v6h2.5V16H9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5h2.5v-1.5H9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5h3.5V7z" /></svg>
+              </div>
+            </div>
+            <span class="kpi-value" id="kpi-net-pay">$0.00</span>
+            <div class="kpi-trend trend-up">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+              <span id="kpi-net-trend">0% vs prev period</span>
+            </div>
+          </div>
+          <!-- KPI 2 -->
+          <div class="glass-card kpi-card">
+            <div class="kpi-header">
+              <span class="kpi-title">Gross Pay</span>
+              <div class="kpi-icon">
+                <svg width="20" height="20" fill="var(--color-primary)" viewBox="0 0 24 24"><path d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
+              </div>
+            </div>
+            <span class="kpi-value" id="kpi-gross-pay">$0.00</span>
+            <div class="kpi-trend trend-up">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+              <span id="kpi-gross-trend">0% vs prev period</span>
+            </div>
+          </div>
+          <!-- KPI 3 -->
+          <div class="glass-card kpi-card">
+            <div class="kpi-header">
+              <span class="kpi-title">Hours Worked</span>
+              <div class="kpi-icon">
+                <svg width="20" height="20" fill="var(--color-info)" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+              </div>
+            </div>
+            <span class="kpi-value" id="kpi-hours-worked">0.0 hrs</span>
+            <div class="kpi-trend trend-neutral">
+              <span>Bi-weekly cumulative</span>
+            </div>
+          </div>
+          <!-- KPI 4 -->
+          <div class="glass-card kpi-card">
+            <div class="kpi-header">
+              <span class="kpi-title">Taxes Withheld</span>
+              <div class="kpi-icon">
+                <svg width="20" height="20" fill="var(--color-danger)" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              </div>
+            </div>
+            <span class="kpi-value" id="kpi-taxes">$0.00</span>
+            <div class="kpi-trend trend-down">
+              <span id="kpi-taxes-subtitle">Includes MISSA (7%)</span>
+            </div>
+          </div>
+          <!-- KPI 5 -->
+          <div class="glass-card kpi-card">
+            <div class="kpi-header">
+              <span class="kpi-title">Debt Deductions (BOMI)</span>
+              <div class="kpi-icon">
+                <svg width="20" height="20" fill="var(--color-warning)" viewBox="0 0 24 24"><path d="M18 17H6v-2h12v2zm0-4H6v-2h12v2zm0-4H6V7h12v2zM3 22h18V2H3v20zM5 4h14v14H5V4z"/></svg>
+              </div>
+            </div>
+            <span class="kpi-value" id="kpi-bomi-loans">$0.00</span>
+            <div class="kpi-trend trend-neutral">
+              <span>BOMI Loan active schedules</span>
+            </div>
+          </div>
+          <!-- KPI 6 -->
+          <div class="glass-card kpi-card">
+            <div class="kpi-header">
+              <span class="kpi-title">Capital Invested</span>
+              <div class="kpi-icon">
+                <svg width="20" height="20" fill="var(--color-secondary)" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+              </div>
+            </div>
+            <span class="kpi-value" id="kpi-pension-er">$0.00</span>
+            <div class="kpi-trend trend-up">
+              <span>Pension Employer Share</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="dashboard-grid">
+          <!-- Line Chart -->
+          <div class="glass-card chart-card">
+            <div class="card-title-group">
+              <h3 class="card-title">Payroll Spending Trends</h3>
+              <p class="card-subtitle">Gross vs Net Pay changes by pay period</p>
+            </div>
+            <div style="position: relative; height: 280px; width: 100%;">
+              <canvas id="dashboard-trend-chart"></canvas>
+            </div>
+          </div>
+          <!-- Breakdown Side Panel -->
+          <div class="glass-card chart-card">
+            <div class="card-title-group">
+              <h3 class="card-title">Latest Period Summary</h3>
+              <p class="card-subtitle">Deductions & Taxes breakdown</p>
+            </div>
+            <div style="position: relative; height: 280px; width: 100%; display: flex; align-items: center; justify-content: center;">
+              <canvas id="dashboard-pie-chart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Uploads Summary Table -->
+        <div class="glass-card">
+          <div class="card-title-group" style="margin-bottom: 1.25rem;">
+            <h3 class="card-title">Recent Activity</h3>
+            <p class="card-subtitle">Latest pre-filled and approved employee paystub logs</p>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="dashboard-recent-table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Pay Period</th>
+                  <th>Pay Date</th>
+                  <th>Hours Worked</th>
+                  <th>Gross Pay</th>
+                  <th>Deductions</th>
+                  <th>Net Pay</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- Populated via Javascript -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW: EMPLOYEES -->
+      <section id="page-employees" class="page-section">
+        <div class="glass-card" style="margin-bottom: 1.5rem;">
+          <div class="employee-roster-header">
+            <div class="search-bar-container">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="employee-search" class="form-control-search" placeholder="Search employees by name, department, position..." oninput="app.renderEmployees()">
+            </div>
+            <button class="btn btn-primary" onclick="app.openEmployeeModal()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add New Employee
+            </button>
+          </div>
+
+          <div class="table-container">
+            <table class="data-table" id="employees-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Employee Name</th>
+                  <th>Department</th>
+                  <th>Position</th>
+                  <th>Hourly Rate</th>
+                  <th>Status</th>
+                  <th>Date Hired</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- Populated via Javascript -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW: PAYSTUBS -->
+      <section id="page-paystubs" class="page-section">
+        <!-- Search and filters -->
+        <div class="glass-card" style="margin-bottom: 1.5rem;">
+          <div class="paystub-filters-bar">
+            <div class="search-bar-container" style="min-width: unset; width: 100%;">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="paystub-search" class="form-control-search" placeholder="Search by name, code..." oninput="app.renderPaystubs()">
+            </div>
+            <select id="paystub-filter-employee" class="form-select" onchange="app.renderPaystubs()">
+              <option value="all">All Employees</option>
+              <!-- Filled dynamically -->
+            </select>
+            <select id="paystub-filter-period" class="form-select" onchange="app.renderPaystubs()">
+              <option value="all">All Pay Periods</option>
+              <!-- Filled dynamically -->
+            </select>
+            <button class="btn btn-secondary" onclick="app.resetPaystubFilters()" style="justify-content: center;">
+              Clear Filters
+            </button>
+          </div>
+
+          <div class="table-container">
+            <table class="data-table" id="paystubs-table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Pay Period</th>
+                  <th>Pay Date</th>
+                  <th>Reg. Hours</th>
+                  <th>OT Hours</th>
+                  <th>Gross Pay</th>
+                  <th>MISSA (7%)</th>
+                  <th>Deductions</th>
+                  <th>Net Pay</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- Populated via Javascript -->
+              </tbody>
+            </table>
+          </div>
+          
+          <div class="pagination-container">
+            <span class="pagination-info" id="paystub-pagination-info">Showing 1-10 of 12 records</span>
+            <div class="pagination-controls">
+              <button class="pagination-btn" id="paystub-prev-btn" onclick="app.prevPaystubPage()">Previous</button>
+              <button class="pagination-btn" id="paystub-next-btn" onclick="app.nextPaystubPage()">Next</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW: UPLOAD -->
+      <section id="page-upload" class="page-section">
+        <div class="upload-container">
+          
+          <!-- Dropzone Left Column -->
+          <div class="glass-card" style="padding: 1.5rem;">
+            <div class="card-title-group" style="margin-bottom: 1.5rem;">
+              <h3 class="card-title">AI Paystub OCR Extraction</h3>
+              <p class="card-subtitle">Drop a paystub PDF or image here, and our advanced LLM reads all payroll data automatically.</p>
+            </div>
+            
+            <div class="upload-dropzone" id="dropzone" ondragover="app.handleDragOver(event)" ondragleave="app.handleDragLeave(event)" ondrop="app.handleDrop(event)" onclick="app.triggerFileSelect()">
+              <div class="upload-icon">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              </div>
+              <h3>Drag & drop paystub file</h3>
+              <p>Supports PDF, PNG, JPG formats up to 10MB</p>
+              <button class="btn btn-secondary">Select File</button>
+              <input type="file" id="file-input" style="display:none;" onchange="app.handleFileSelect(event)">
+              
+              <!-- Radar scanner visual overlay -->
+              <div class="scan-overlay" id="scan-overlay">
+                <div class="scan-radar">
+                  <div class="scan-line"></div>
+                  <svg width="40" height="40" fill="var(--color-primary)" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z" style="display:none;"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" style="display:none;"/><path d="M9 16h6v-2H9v2zm3-10c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zm0 8.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>
+                </div>
+                <p>AI Engine OCR Parsing...</p>
+                <div class="scan-status" id="scan-status">Analyzing text structure...</div>
+              </div>
+            </div>
+
+            <!-- Dynamic employee demo pills -->
+            <div class="demo-samples">
+              <div class="demo-samples-title">Quick OCR Simulation — Click an Employee</div>
+              <div class="sample-pills" id="dynamic-demo-pills">
+                <!-- Populated dynamically from employee roster -->
+                <p style="color:var(--text-muted); font-size:0.8rem; text-align:center;">Add employees first, then simulate here.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Review Form Right Column -->
+          <div class="glass-card paystub-review-form" id="review-form-card">
+            <div class="card-title-group" style="margin-bottom: 1.25rem;">
+              <h3 class="card-title">Extract Review & Approve</h3>
+              <p class="card-subtitle">Review the AI-extracted fields, make adjustments, and commit to database.</p>
+            </div>
+            
+            <form id="paystub-ocr-form" onsubmit="app.saveExtractedPaystub(event)">
+              <div class="form-group">
+                <label for="review-employee">Linked Employee Profile</label>
+                <select id="review-employee" class="form-select" required onchange="app.updateReviewFormRates()">
+                  <!-- Dynamically populated -->
+                </select>
+              </div>
+              
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="review-period-start">Pay Period Start</label>
+                  <input type="date" id="review-period-start" class="form-control" required>
+                </div>
+                <div class="form-group">
+                  <label for="review-period-end">Pay Period End</label>
+                  <input type="date" id="review-period-end" class="form-control" required>
+                </div>
+              </div>
+
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="review-pay-date">Official Pay Date</label>
+                  <input type="date" id="review-pay-date" class="form-control" required>
+                </div>
+                <div class="form-group">
+                  <label for="review-hourly-rate">Hourly Rate ($)</label>
+                  <input type="number" id="review-hourly-rate" class="form-control" step="0.01" required oninput="app.recalculateReviewTotals()">
+                </div>
+              </div>
+
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="review-hours-worked">Regular Hours Worked</label>
+                  <input type="number" id="review-hours-worked" class="form-control" step="0.1" value="80" required oninput="app.recalculateReviewTotals()">
+                </div>
+                <div class="form-group">
+                  <label for="review-ot-hours">Overtime Hours Worked</label>
+                  <input type="number" id="review-ot-hours" class="form-control" step="0.1" value="0" required oninput="app.recalculateReviewTotals()">
+                </div>
+              </div>
+
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label for="review-bomi-loan">BOMI Loan Deduction ($)</label>
+                  <input type="number" id="review-bomi-loan" class="form-control" step="0.01" value="0.00" required oninput="app.recalculateReviewTotals()">
+                </div>
+                <div class="form-group">
+                  <label for="review-health">Health Insurance Deduction ($)</label>
+                  <input type="number" id="review-health" class="form-control" step="0.01" value="75.00" required oninput="app.recalculateReviewTotals()">
+                </div>
+              </div>
+
+              <div class="financial-summary-badge">
+                <div class="fsb-item">
+                  <span class="fsb-label">Gross Earnings</span>
+                  <span class="fsb-value" id="review-sum-gross">$0.00</span>
+                </div>
+                <div class="fsb-item">
+                  <span class="fsb-label">Taxes & MISSA</span>
+                  <span class="fsb-value" id="review-sum-taxes" style="color:var(--color-danger);">$0.00</span>
+                </div>
+                <div class="fsb-item">
+                  <span class="fsb-label">Deductions</span>
+                  <span class="fsb-value" id="review-sum-deductions" style="color:var(--color-warning);">$0.00</span>
+                </div>
+                <div class="fsb-item">
+                  <span class="fsb-label">Net Employee Pay</span>
+                  <span class="fsb-value net" id="review-sum-net">$0.00</span>
+                </div>
+              </div>
+
+              <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+                <button type="button" class="btn btn-secondary" onclick="app.cancelOCRReview()">Cancel</button>
+                <button type="submit" class="btn btn-success">Save Paystub Record</button>
+              </div>
+            </form>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- VIEW: REPORTS -->
+      <section id="page-reports" class="page-section">
+        <div class="reports-grid">
+          <!-- Bar Chart Gross vs Net -->
+          <div class="glass-card report-chart-box">
+            <div class="card-title-group">
+              <h3 class="card-title">Employee Net Pay Distribution</h3>
+              <p class="card-subtitle">Aggregate payroll distribution across employees</p>
+            </div>
+            <div style="position: relative; height: 300px; width: 100%;">
+              <canvas id="reports-net-distribution-chart"></canvas>
+            </div>
+          </div>
+          <!-- Side Insight Box -->
+          <div class="glass-card report-summary-box">
+            <div class="card-title-group">
+              <h3 class="card-title">Deductions Pie Breakdown</h3>
+              <p class="card-subtitle">Total withholdings & deductions for the latest pay period</p>
+            </div>
+            <div style="position: relative; height: 200px; width: 100%; display: flex; align-items: center; justify-content: center; margin-bottom:1rem;">
+              <canvas id="reports-deduction-chart"></canvas>
+            </div>
+            <div class="report-list-items" id="reports-summary-list">
+              <!-- Filled via JavaScript -->
+            </div>
+          </div>
+        </div>
+
+        <div class="glass-card">
+          <div class="card-title-group" style="margin-bottom: 1.25rem;">
+            <h3 class="card-title">Jurisdiction Deduction Breakdown (All-Time Cumulative)</h3>
+            <p class="card-subtitle">Detailed tracking of statutory and voluntary local payroll lines</p>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="reports-statutory-table">
+              <thead>
+                <tr>
+                  <th>Jurisdiction Item</th>
+                  <th>Description</th>
+                  <th>Category</th>
+                  <th>Calculation Rule</th>
+                  <th>Total Accumulated</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>MISSA Employee Tax</strong></td>
+                  <td>Local Social Security Withholding</td>
+                  <td>Statutory Tax</td>
+                  <td>7.00% of Employee Gross</td>
+                  <td id="rep-tot-missa-ee" class="report-item-val">$0.00</td>
+                </tr>
+                <tr>
+                  <td><strong>MISSA Employer Share</strong></td>
+                  <td>Mandatory Pension Match (Capital Invested)</td>
+                  <td>Statutory Match</td>
+                  <td>7.00% Employer Matching</td>
+                  <td id="rep-tot-missa-er" class="report-item-val">$0.00</td>
+                </tr>
+                <tr>
+                  <td><strong>BOMI Loan Deductions</strong></td>
+                  <td>Bank of Marshall Islands Debt Deductions</td>
+                  <td>Debt Deduction</td>
+                  <td>Amortized Loan Direct Debit</td>
+                  <td id="rep-tot-bomi" class="report-item-val">$0.00</td>
+                </tr>
+                <tr>
+                  <td><strong>Pension Employee Contribution</strong></td>
+                  <td>Supplemental Private Retirement Plan</td>
+                  <td>Voluntary Deduction</td>
+                  <td>5.00% Supplemental Allocation</td>
+                  <td id="rep-tot-pension-ee" class="report-item-val">$0.00</td>
+                </tr>
+                <tr>
+                  <td><strong>Pension Employer Match</strong></td>
+                  <td>Supplemental Private Retirement Plan Match</td>
+                  <td>Voluntary Contribution</td>
+                  <td>5.00% Matching Contribution</td>
+                  <td id="rep-tot-pension-er" class="report-item-val">$0.00</td>
+                </tr>
+                <tr>
+                  <td><strong>Statutory Taxes (US/Other)</strong></td>
+                  <td>Federal Income Tax, SS (6.2%), Medicare (1.45%)</td>
+                  <td>Statutory Tax</td>
+                  <td>Calculated Standard Deductions</td>
+                  <td id="rep-tot-fed-ss" class="report-item-val">$0.00</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- MODAL: ADD / EDIT EMPLOYEE -->
+  <div class="modal-overlay" id="employee-modal">
+    <div class="modal-content">
+      <button class="modal-close" onclick="app.closeEmployeeModal()">&times;</button>
+      <h3 class="modal-title" id="employee-modal-title">Add New Employee</h3>
+      
+      <form id="employee-form" onsubmit="app.saveEmployee(event)">
+        <input type="hidden" id="emp-modal-id">
+        
+        <div class="form-group">
+          <label for="emp-modal-name">Employee Full Name</label>
+          <input type="text" id="emp-modal-name" class="form-control" required placeholder="e.g. Alex Camacho">
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label for="emp-modal-dept">Department</label>
+            <select id="emp-modal-dept" class="form-select" required>
+              <option value="Information Technology">Information Technology</option>
+              <option value="Finance">Finance</option>
+              <option value="Operations">Operations</option>
+              <option value="Administration">Administration</option>
+              <option value="Sales">Sales</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="emp-modal-pos">Job Position</label>
+            <input type="text" id="emp-modal-pos" class="form-control" required placeholder="e.g. Senior Network Engineer">
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label for="emp-modal-rate">Hourly Rate ($)</label>
+            <input type="number" id="emp-modal-rate" class="form-control" step="0.01" min="1" required placeholder="e.g. 45.00">
+          </div>
+          <div class="form-group">
+            <label for="emp-modal-status">Roster Status</label>
+            <select id="emp-modal-status" class="form-select" required>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 1.5rem;">
+          <label for="emp-modal-hired">Hiring Date</label>
+          <input type="date" id="emp-modal-hired" class="form-control" required>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+          <button type="button" class="btn btn-secondary" onclick="app.closeEmployeeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="employee-modal-submit-btn">Save Employee</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: VIEW OFFICIAL PAYSTUB SLIP -->
+  <div class="modal-overlay" id="paystub-modal">
+    <div class="modal-content modal-content-large">
+      <button class="modal-close" onclick="app.closePaystubModal()">&times;</button>
+      <h3 class="modal-title" style="margin-bottom:1rem;">Official Payroll Breakdown</h3>
+      
+      <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-bottom:1rem;">
+        <button class="btn btn-secondary" onclick="window.print()">
+          <!-- Print Icon -->
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          Print Paystub / Save PDF
+        </button>
+      </div>
+
+      <!-- Printable Professional Sheet -->
+      <div class="paystub-sheet" id="printable-paystub-content">
+        <!-- Will be dynamically rendered -->
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATION -->
+  <div class="toast" id="toast-notification">
+    <div class="toast-icon" id="toast-icon"></div>
+    <div class="toast-message" id="toast-message">Success message here!</div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="seedData.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
