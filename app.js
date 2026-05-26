@@ -64,6 +64,12 @@ class PayTrackApp {
   saveToLocalStorage() {
     localStorage.setItem("paytrack_employees", JSON.stringify(this.employees));
     localStorage.setItem("paytrack_paystubs", JSON.stringify(this.paystubs));
+    // Helpful debug log for troubleshooting save issues in the browser console
+    try {
+      console.debug(`PayTrack: saved ${this.employees.length} employees and ${this.paystubs.length} paystubs to localStorage.`);
+    } catch (err) {
+      console.warn('PayTrack: unable to log localStorage save details', err);
+    }
   }
 
   setupEventListeners() {
@@ -1016,7 +1022,11 @@ class PayTrackApp {
     formCard.classList.add("active");
 
     // Populate employee and rate
-    document.getElementById("review-employee").value = emp.id;
+    const reviewEmpSelect = document.getElementById("review-employee");
+    if (!reviewEmpSelect.querySelector(`option[value="${emp.id}"]`)) {
+      reviewEmpSelect.innerHTML += `<option value="${emp.id}">${emp.name} (${emp.position})</option>`;
+    }
+    reviewEmpSelect.value = emp.id;
     document.getElementById("review-hourly-rate").value = emp.hourlyRate.toFixed(2);
     
     // Assign bi-weekly dates based on today
@@ -1179,13 +1189,13 @@ class PayTrackApp {
         annualBalance: prevAnnualBalance + annualAccrued - annualUsed
       },
       status: "Approved",
-      fileName: `paystub_${emp.name.toLowerCase().replace(" ", "_")}_${payDate}.pdf`
+      fileName: `paystub_${emp.name.toLowerCase().replace(/\s+/g, "_")}_${payDate}.pdf`
     };
-
-    // Save Stub & Refresh State
+    // Save Stub & Refresh State (log new stub for debugging)
+    console.debug('PayTrack: committing new paystub', newStub);
     this.paystubs.unshift(newStub);
     this.saveToLocalStorage();
-    
+
     this.showToast(`Paystub successfully committed for ${emp.name}`, "success");
     
     // Refresh filter options
