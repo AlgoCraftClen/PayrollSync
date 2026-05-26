@@ -7,6 +7,7 @@ class PayTrackApp {
     this.paystubPage = 1;
     this.paystubPerPage = 8;
     this.pendingUpload = null;
+    this.uploadedFiles = [];
     
     // Chart instances
     this.dashboardTrendChart = null;
@@ -72,10 +73,111 @@ class PayTrackApp {
 
   normalizeOCRText(text) {
     return (text || "")
-      .replace(/\r/g, "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
       .replace(/\u00A0/g, " ")
-      .replace(/\s+/g, " ")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
       .trim();
+  }
+
+  normalizeOCRLines(text) {
+    return this.normalizeOCRText(text)
+      .split(/\n+/)
+      .map(line => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+  }
+
+  getOCROptions() {
+    return {
+      tessedit_pageseg_mode: 6,
+      preserve_interword_spaces: 1,
+      oem: 1,
+      tessedit_char_whitelist: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$.,/-: "
+    };
+  }
+
+  async imageToCanvas(source) {
+    if (source instanceof HTMLCanvasElement) {
+      return source;
+    }
+
+    if (source instanceof File || source instanceof Blob) {
+      const url = URL.createObjectURL(source);
+      try {
+        const image = await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = url;
+        });
+
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        canvas.width = image.naturalWidth || image.width;
+        canvas.height = image.naturalHeight || image.height;
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        return canvas;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    throw new Error("Unsupported OCR source.");
+  }
+
+  preprocessOCRCanvas(canvas) {
+    const sourceWidth = canvas.width || 0;
+    const sourceHeight = canvas.height || 0;
+
+    if (!sourceWidth || !sourceHeight) {
+      return canvas;
+    }
+
+    const targetWidth = Math.max(1400, sourceWidth * 1.8);
+    const scale = targetWidth / sourceWidth;
+    const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+
+    const processedCanvas = document.createElement("canvas");
+    processedCanvas.width = targetWidth;
+    processedCanvas.height = targetHeight;
+
+    const ctx = processedCanvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(canvas, 0, 0, targetWidth, targetHeight);
+
+    const imageData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+    const data = imageData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+      const adjusted = Math.min(255, Math.max(0, (gray - 128) * 1.35 + 128));
+
+      data[i] = adjusted;
+      data[i + 1] = adjusted;
+      data[i + 2] = adjusted;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+    return processedCanvas;
+  }
+
+  async runOCRFromCanvas(canvas) {
+    if (typeof Tesseract === "undefined" || typeof Tesseract.recognize !== "function") {
+      this.showToast("OCR library failed to load. Please refresh and try again.", "error");
+      return null;
+    }
+
+    try {
+      const processedCanvas = this.preprocessOCRCanvas(canvas);
+      const result = await Tesseract.recognize(processedCanvas, "eng", this.getOCROptions());
+      return (result?.data?.text || "").trim();
+    } catch (error) {
+      console.error("PayTrack: OCR failed", error);
+      this.showToast("OCR failed to read the document. Please try a clearer scan or image.", "error");
+      return null;
+    }
   }
 
   extractNumber(value) {
@@ -146,10 +248,8 @@ class PayTrackApp {
 
   parseOCRText(ocrText, fallbackFileName) {
     const text = this.normalizeOCRText(ocrText);
-    const lines = text
-      .split("\n")
-      .map(line => line.trim())
-      .filter(Boolean);
+    const lines = this.normalizeOCRLines(ocrText);
+    const flatText = text.toLowerCase();
 
     const parsed = {
       employee: this.matchEmployeeFromOCR(text, fallbackFileName),
@@ -180,12 +280,21 @@ class PayTrackApp {
       parsed.payPeriodEnd = dateCandidates[1];
     }
 
-    const payDateLabel = lines.find(line => /pay date|payment date|paydate/.test(line.toLowerCase()));
-    if (payDateLabel) {
-      const nextLine = lines[lines.indexOf(payDateLabel) + 1];
-      const payDateCandidate = this.normalizeOCRDate(nextLine || payDateLabel);
+    const payDateHint = lines.find(line => /pay date|payment date|paydate|pav date|pavdate/.test(line.toLowerCase()));
+    if (payDateHint) {
+      const payDateCandidate = this.normalizeOCRDate(payDateHint.replace(/pay date|payment date|paydate|pav date|pavdate/gi, ""));
       if (payDateCandidate) {
         parsed.payDate = payDateCandidate;
+      }
+    }
+
+    if (!parsed.payDate && lines.length > 0) {
+      const lineWithDate = lines.find(line => /date/.test(line.toLowerCase()));
+      if (lineWithDate) {
+        const candidate = this.normalizeOCRDate(lineWithDate);
+        if (candidate) {
+          parsed.payDate = candidate;
+        }
       }
     }
 
@@ -195,8 +304,10 @@ class PayTrackApp {
 
     const labelMap = [
       ["hourly rate", "hourlyRate"],
+      ["hourly", "hourlyRate"],
       ["regular hours", "hoursWorked"],
       ["hours worked", "hoursWorked"],
+      ["hrs worked", "hoursWorked"],
       ["overtime", "overtimeHours"],
       ["ot hours", "overtimeHours"],
       ["gross pay", "grossPay"],
@@ -204,8 +315,25 @@ class PayTrackApp {
       ["net pay", "netPay"],
       ["net earnings", "netPay"],
       ["bomi", "bomiLoan"],
+      ["health insurance", "healthInsurance"],
       ["health", "healthInsurance"]
     ];
+
+    const extractValueFromLine = (line, index) => {
+      const sameLineValue = this.extractNumber(line);
+      if (sameLineValue !== null) {
+        return sameLineValue;
+      }
+
+      for (let i = index + 1; i < Math.min(lines.length, index + 4); i += 1) {
+        const nextNumber = this.extractNumber(lines[i]);
+        if (nextNumber !== null) {
+          return nextNumber;
+        }
+      }
+
+      return null;
+    };
 
     lines.forEach((line, index) => {
       const lower = line.toLowerCase();
@@ -214,62 +342,57 @@ class PayTrackApp {
           return;
         }
 
-        const sameLineValue = this.extractNumber(line);
-        if (sameLineValue !== null && key !== "hoursWorked" && key !== "overtimeHours") {
-          parsed[key] = sameLineValue;
-          return;
-        }
-
-        const nextLine = lines[index + 1];
-        if (nextLine) {
-          const nextNumber = this.extractNumber(nextLine);
-          if (nextNumber !== null) {
-            parsed[key] = nextNumber;
-          }
+        const value = extractValueFromLine(line, index);
+        if (value !== null) {
+          parsed[key] = value;
         }
       });
     });
 
     if (parsed.hoursWorked === null) {
-      const hoursLine = lines.find(line => /hours worked|regular hours|hours/.test(line.toLowerCase()));
+      const hoursLine = lines.find(line => /regular hours|hours worked|hrs worked|hrs|hours/.test(line.toLowerCase()));
       if (hoursLine) {
-        parsed.hoursWorked = this.extractNumber(hoursLine);
+        parsed.hoursWorked = this.extractNumber(hoursLine) ?? null;
       }
     }
 
     if (parsed.overtimeHours === null) {
-      const overtimeLine = lines.find(line => /overtime|ot hours/.test(line.toLowerCase()));
+      const overtimeLine = lines.find(line => /overtime|ot hours|ot/.test(line.toLowerCase()));
       if (overtimeLine) {
-        parsed.overtimeHours = this.extractNumber(overtimeLine);
+        parsed.overtimeHours = this.extractNumber(overtimeLine) ?? null;
       }
     }
 
     if (parsed.grossPay === null) {
-      const grossLine = lines.find(line => /gross|total earnings/.test(line.toLowerCase()));
+      const grossLine = lines.find(line => /gross|total earnings|earnings/.test(line.toLowerCase()));
       if (grossLine) {
-        parsed.grossPay = this.extractNumber(grossLine);
+        parsed.grossPay = this.extractNumber(grossLine) ?? null;
       }
     }
 
     if (parsed.netPay === null) {
-      const netLine = lines.find(line => /net pay|net earnings/.test(line.toLowerCase()));
+      const netLine = lines.find(line => /net pay|net earnings|take home|net/.test(line.toLowerCase()));
       if (netLine) {
-        parsed.netPay = this.extractNumber(netLine);
+        parsed.netPay = this.extractNumber(netLine) ?? null;
       }
     }
 
     if (parsed.bomiLoan === null) {
       const bomiLine = lines.find(line => /bomi/.test(line.toLowerCase()));
       if (bomiLine) {
-        parsed.bomiLoan = this.extractNumber(bomiLine);
+        parsed.bomiLoan = this.extractNumber(bomiLine) ?? null;
       }
     }
 
     if (parsed.healthInsurance === null) {
       const healthLine = lines.find(line => /health/.test(line.toLowerCase()));
       if (healthLine) {
-        parsed.healthInsurance = this.extractNumber(healthLine);
+        parsed.healthInsurance = this.extractNumber(healthLine) ?? null;
       }
+    }
+
+    if (parsed.grossPay !== null && parsed.netPay !== null && parsed.netPay > parsed.grossPay) {
+      parsed.netPay = null;
     }
 
     return parsed;
@@ -282,15 +405,24 @@ class PayTrackApp {
     }
 
     try {
-      const result = await Tesseract.recognize(file, "eng", {
-        logger: (progress) => {
-          if (progress?.status && progress.status !== "recognizing text") {
-            const statusEl = document.getElementById("scan-status");
-            if (statusEl) {
-              statusEl.innerText = progress.status;
-            }
+      const logger = (progress) => {
+        if (progress?.status && progress.status !== "recognizing text") {
+          const statusEl = document.getElementById("scan-status");
+          if (statusEl) {
+            statusEl.innerText = progress.status;
           }
         }
+      };
+
+      if (file instanceof HTMLCanvasElement) {
+        return await this.runOCRFromCanvas(file);
+      }
+
+      const canvas = await this.imageToCanvas(file);
+      const processedCanvas = this.preprocessOCRCanvas(canvas);
+      const result = await Tesseract.recognize(processedCanvas, "eng", {
+        ...this.getOCROptions(),
+        logger
       });
 
       return (result?.data?.text || "").trim();
@@ -1294,14 +1426,22 @@ class PayTrackApp {
     const fileType = (file.type || "").toLowerCase();
     const fileName = (file.name || "").trim();
     const imageTypes = ["image/png", "image/jpeg", "image/jpg"];
+    const pdfType = "application/pdf";
 
     if (!fileName) {
       this.showToast("Please choose a file to upload.", "error");
       return;
     }
 
-    if (!imageTypes.includes(fileType) && !fileName.toLowerCase().match(/\.(png|jpg|jpeg)$/i)) {
-      this.showToast("OCR is currently available for PNG and JPG images only. Please upload an image file.", "error");
+    // Duplicate file check (by name and size)
+    if (this.uploadedFiles && this.uploadedFiles.some(f => f.fileName === fileName && f.size === file.size)) {
+      this.showToast("This file has already been uploaded. Duplicate uploads are not allowed.", "error");
+      return;
+    }
+
+    // Accept PNG, JPG, PDF
+    if (!imageTypes.includes(fileType) && fileType !== pdfType && !fileName.toLowerCase().match(/\.(png|jpg|jpeg|pdf)$/i)) {
+      this.showToast("OCR is available for PDF, PNG, and JPG files only. Please upload a supported file.", "error");
       return;
     }
 
@@ -1312,6 +1452,10 @@ class PayTrackApp {
       size: file.size
     };
 
+    // Track uploaded files for duplicate detection
+    if (!this.uploadedFiles) this.uploadedFiles = [];
+    this.uploadedFiles.push({ fileName, size: file.size });
+
     console.log(`Processing file: ${fileName}`);
     const scanOverlay = document.getElementById("scan-overlay");
     const scanStatus = document.getElementById("scan-status");
@@ -1319,7 +1463,13 @@ class PayTrackApp {
     scanOverlay.style.display = "flex";
     scanStatus.innerText = "Loading OCR engine...";
 
-    const ocrText = await this.runOCR(file);
+    let ocrText = null;
+    if (fileType === pdfType || fileName.toLowerCase().endsWith('.pdf')) {
+      scanStatus.innerText = "Converting PDF to image...";
+      ocrText = await this.ocrFromPDF(file);
+    } else {
+      ocrText = await this.runOCR(file);
+    }
     scanOverlay.style.display = "none";
 
     if (!ocrText) {
@@ -1337,6 +1487,32 @@ class PayTrackApp {
 
     this.applyOCRDataToForm(parsed);
     this.showToast(`AI successfully parsed "${fileName}" — review the extracted data.`, "success");
+  }
+  // Convert PDF to image and run OCR on the first page
+  async ocrFromPDF(file) {
+    // Use PDF.js to render the first page to a canvas, then pass the canvas image to Tesseract
+    try {
+      const pdfjsLib = window['pdfjsLib'];
+      if (!pdfjsLib) {
+        this.showToast("PDF.js library not loaded. Cannot process PDF.", "error");
+        return null;
+      }
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 2.0 });
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: context, viewport: viewport }).promise;
+      // Convert canvas to blob for Tesseract
+      return await this.runOCR(canvas);
+    } catch (err) {
+      console.error("PDF to image conversion failed", err);
+      this.showToast("Failed to process PDF file for OCR.", "error");
+      return null;
+    }
   }
 
   simulateDemoUpload(employeeId) {
